@@ -1,0 +1,73 @@
+# =============================================================================
+# UE Load Generator — Simulates subscriber registrations hitting AMF
+# Used to drive traffic for scenarios (especially 2 and 4)
+# Runs as a Job or Deployment depending on scenario needs
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ue-simulator
+  namespace: demo-5g
+  labels:
+    app: ue-simulator
+spec:
+  replicas: 0  # Scaled up by scenario scripts
+  selector:
+    matchLabels:
+      app: ue-simulator
+  template:
+    metadata:
+      labels:
+        app: ue-simulator
+    spec:
+      nodeSelector:
+        role: app
+      containers:
+        - name: ue-simulator
+          image: python:3.12-slim
+          command:
+            - python
+            - -c
+            - |
+              import urllib.request, json, time, os, random
+
+              AMF_ENDPOINT = os.environ.get("AMF_ENDPOINT", "http://amf:8080")
+              RPS = int(os.environ.get("REQUESTS_PER_SECOND", "2"))
+              PLMN_ID = "00101"
+
+              print(f"INFO: UE Simulator starting | target={AMF_ENDPOINT} | rate={RPS} req/s", flush=True)
+              print(f"INFO: Simulating subscriber registrations (mass UE attach)", flush=True)
+
+              counter = 0
+              errors = 0
+              while True:
+                  for _ in range(RPS):
+                      counter += 1
+                      supi = f"imsi-{PLMN_ID}{counter:010d}"
+                      payload = json.dumps({"supi": supi, "registrationType": "INITIAL_REGISTRATION"}).encode()
+                      try:
+                          req = urllib.request.Request(f"{AMF_ENDPOINT}/namf-comm/v1/ue-registrations",
+                                                      data=payload, headers={"Content-Type": "application/json"}, method="POST")
+                          resp = urllib.request.urlopen(req, timeout=10)
+                          if counter % 50 == 0:
+                              print(f"INFO: UE attach progress | total={counter} | errors={errors} | last_supi={supi}", flush=True)
+                      except Exception as e:
+                          errors += 1
+                          if errors % 10 == 1:
+                              print(f"ERROR: UE registration failed | SUPI={supi} | error={e} | total_errors={errors}", flush=True)
+                  time.sleep(1)
+          resources:
+            requests:
+              cpu: 64m
+              memory: 64Mi
+            limits:
+              cpu: 256m
+              memory: 128Mi
+          env:
+            - name: AMF_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: core-config
+                  key: amf-endpoint
+            - name: REQUESTS_PER_SECOND
+              value: "2"

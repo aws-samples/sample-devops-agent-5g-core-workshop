@@ -1,0 +1,238 @@
+# =============================================================================
+# NRF — Network Repository Function (Service Discovery Registry)
+# Backed by Redis. All NFs register here and query here.
+# Scenario 1 target: when Redis SG is revoked, NRF fails → entire core blind.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nrf
+  namespace: demo-5g
+  labels:
+    app: nrf
+    nf-type: nrf
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nrf
+  template:
+    metadata:
+      labels:
+        app: nrf
+        nf-type: nrf
+    spec:
+      nodeSelector:
+        role: app
+      containers:
+        - name: nrf
+          image: python:3.12-slim
+          command:
+            - python
+            - -c
+            - |
+              import http.server, json, threading, time, os, socket, urllib.parse
+
+              REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
+              REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
+              NF_INSTANCE_ID = os.environ.get("HOSTNAME", "nrf-unknown")
+
+              # In-memory fallback (used when Redis is up, synced to Redis)
+              nf_profiles = {}
+              redis_healthy = False
+              last_error = ""
+
+              def resp_encode(*args):
+                  """Encode command as RESP array."""
+                  parts = [f"*{len(args)}\r\n"]
+                  for a in args:
+                      a = str(a)
+                      parts.append(f"${len(a)}\r\n{a}\r\n")
+                  return "".join(parts).encode()
+
+              def redis_raw(cmd_bytes):
+                  """Send RESP command, return raw response."""
+                  s = socket.create_connection((REDIS_HOST, REDIS_PORT), timeout=3)
+                  s.send(cmd_bytes)
+                  resp = b""
+                  while True:
+                      chunk = s.recv(4096)
+                      if not chunk:
+                          break
+                      resp += chunk
+                      if b"\r\n" in chunk:
+                          break
+                  s.close()
+                  return resp
+
+              def check_redis():
+                  global redis_healthy, last_error
+                  while True:
+                      try:
+                          resp = redis_raw(resp_encode("PING"))
+                          if b"+PONG" in resp:
+                              redis_healthy = True
+                              last_error = ""
+                          else:
+                              redis_healthy = False
+                              last_error = f"Unexpected: {resp}"
+                      except Exception as e:
+                          redis_healthy = False
+                          last_error = str(e)
+                          print(f"ERROR: NRF Redis health check failed: {e} | instance={NF_INSTANCE_ID}", flush=True)
+                      time.sleep(5)
+
+              def redis_set(key, value):
+                  data = json.dumps(value)
+                  redis_raw(resp_encode("SET", key, data))
+
+              def redis_get(key):
+                  resp = redis_raw(resp_encode("GET", key))
+                  lines = resp.split(b"\r\n")
+                  if lines[0].startswith(b"$-1"):
+                      return None
+                  if len(lines) > 1:
+                      return json.loads(lines[1])
+                  return None
+
+              def redis_keys(pattern):
+                  resp = redis_raw(resp_encode("KEYS", pattern))
+                  lines = resp.decode().split("\r\n")
+                  keys = [l for l in lines if l and not l.startswith("*") and not l.startswith("$")]
+                  return keys
+
+              class Handler(http.server.BaseHTTPRequestHandler):
+                  def do_POST(self):
+                      if self.path == "/nnrf-nfm/v1/nf-instances":
+                          # NF Registration
+                          length = int(self.headers.get("Content-Length", 0))
+                          body = json.loads(self.rfile.read(length)) if length else {}
+                          nf_type = body.get("nfType", "UNKNOWN")
+                          nf_id = body.get("nfInstanceId", "unknown")
+                          address = body.get("ipv4Addresses", [body.get("fqdn", "unknown")])[0]
+
+                          if not redis_healthy:
+                              print(f"ERROR: NFRegister failed for {nf_type} instance={nf_id} - Redis unavailable: {last_error}", flush=True)
+                              self.send_response(503)
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"error": "NRF registry unavailable", "detail": last_error}).encode())
+                              return
+
+                          profile = {"nfType": nf_type, "nfInstanceId": nf_id, "nfStatus": "REGISTERED", "ipv4Addresses": [address], "registeredAt": time.time()}
+                          key = f"nrf:profile:{nf_type}:{nf_id}"
+                          try:
+                              redis_set(key, profile)
+                              nf_profiles[f"{nf_type}:{nf_id}"] = profile
+                              print(f"INFO: NF registered: type={nf_type} instance={nf_id} address={address}", flush=True)
+                              self.send_response(201)
+                              self.end_headers()
+                              self.wfile.write(json.dumps(profile).encode())
+                          except Exception as e:
+                              print(f"ERROR: NFRegister Redis write failed: {e} | nf={nf_type}/{nf_id}", flush=True)
+                              self.send_response(503)
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"error": str(e)}).encode())
+                          return
+
+                      self.send_response(404)
+                      self.end_headers()
+
+                  def do_GET(self):
+                      parsed = urllib.parse.urlparse(self.path)
+                      params = urllib.parse.parse_qs(parsed.query)
+
+                      if parsed.path == "/nnrf-disc/v1/nf-instances":
+                          # NF Discovery
+                          target_nf_type = params.get("target-nf-type", [None])[0]
+                          requester = params.get("requester-nf-type", ["unknown"])[0]
+
+                          if not redis_healthy:
+                              print(f"ERROR: NFDiscover failed - requester={requester} target={target_nf_type} - Redis unavailable: {last_error}", flush=True)
+                              self.send_response(503)
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"error": "NRF discovery unavailable", "detail": last_error}).encode())
+                              return
+
+                          try:
+                              keys = redis_keys(f"nrf:profile:{target_nf_type}:*")
+                              instances = []
+                              for k in keys:
+                                  profile = redis_get(k)
+                                  if profile:
+                                      instances.append(profile)
+                              print(f"INFO: NFDiscover: requester={requester} target={target_nf_type} results={len(instances)}", flush=True)
+                              self.send_response(200)
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"nfInstances": instances}).encode())
+                          except Exception as e:
+                              print(f"ERROR: NFDiscover Redis read failed: {e} | requester={requester} target={target_nf_type}", flush=True)
+                              self.send_response(503)
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"error": str(e)}).encode())
+                          return
+
+                      elif self.path == "/health":
+                          if redis_healthy:
+                              self.send_response(200)
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"status": "healthy", "nfType": "NRF", "redis": "connected", "registeredNFs": len(nf_profiles)}).encode())
+                          else:
+                              self.send_response(503)
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"status": "unhealthy", "nfType": "NRF", "redis": "disconnected", "error": last_error}).encode())
+                          return
+
+                      self.send_response(404)
+                      self.end_headers()
+
+                  def log_message(self, format, *args): pass
+
+              threading.Thread(target=check_redis, daemon=True).start()
+              print(f"INFO: NRF starting | instance={NF_INSTANCE_ID} | redis={REDIS_HOST}:{REDIS_PORT}", flush=True)
+              print(f"INFO: NRF ready - accepting NF registrations and discovery requests", flush=True)
+              http.server.HTTPServer(("", 8080), Handler).serve_forever()
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 64m
+              memory: 64Mi
+            limits:
+              cpu: 128m
+              memory: 128Mi
+          env:
+            - name: REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: core-config
+                  key: redis-host
+            - name: REDIS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: core-config
+                  key: redis-port
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nrf
+  namespace: demo-5g
+spec:
+  selector:
+    app: nrf
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP

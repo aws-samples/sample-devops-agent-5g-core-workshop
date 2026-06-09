@@ -1,0 +1,25 @@
+# =============================================================================
+# ALB Ingress — Exposes AMF as the N2 entry point (simulates RAN → Core)
+# Used by load generator to send UE registration requests
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: 5g-core-ingress
+  namespace: demo-5g
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: amf
+                port:
+                  number: 8080

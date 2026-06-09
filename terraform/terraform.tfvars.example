@@ -1,0 +1,12 @@
+# =============================================================================
+# DevOps Agent 5G Core Demo — Configuration
+# =============================================================================
+
+region       = "us-east-1"
+cluster_name = "devops-agent-demo"
+
+# DevOps Agent Space IAM Role ARN
+# Leave empty on first apply. After creating the Agent Space in the console,
+# copy the role ARN from: Agent Space → Capabilities → Cloud → Primary Source
+# Then re-run terraform apply.
+devops_agent_role_arn = ""

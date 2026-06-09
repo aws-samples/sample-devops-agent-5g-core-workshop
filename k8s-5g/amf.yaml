@@ -1,0 +1,230 @@
+# =============================================================================
+# AMF — Access and Mobility Management Function
+# Entry point for UE registration. Queries NRF to discover SMF.
+# Scenario 2: can't scale during subscriber spike (ASG ceiling)
+# Scenario 3: bad image push (CrashLoopBackOff)
+# Scenario 4: HPA thrashing during busy hour
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amf
+  namespace: demo-5g
+  labels:
+    app: amf
+    nf-type: amf
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: amf
+  template:
+    metadata:
+      labels:
+        app: amf
+        nf-type: amf
+    spec:
+      nodeSelector:
+        role: app
+      containers:
+        - name: amf
+          image: python:3.12-slim
+          command:
+            - python
+            - -c
+            - |
+              import http.server, json, threading, time, os, urllib.request, urllib.error, random
+
+              NRF_ENDPOINT = os.environ.get("NRF_ENDPOINT", "http://nrf:8080")
+              NF_INSTANCE_ID = os.environ.get("HOSTNAME", "amf-unknown")
+              PLMN_ID = "00101"  # Test PLMN
+
+              nrf_available = False
+              smf_address = None
+              ue_counter = 0
+              registration_errors = 0
+
+              def register_with_nrf():
+                  """Register AMF with NRF on startup."""
+                  global nrf_available
+                  payload = json.dumps({
+                      "nfType": "AMF",
+                      "nfInstanceId": NF_INSTANCE_ID,
+                      "nfStatus": "REGISTERED",
+                      "plmnList": [{"mcc": "001", "mnc": "01"}],
+                      "ipv4Addresses": [f"amf:8080"],
+                      "fqdn": "amf.demo-5g.svc.cluster.local"
+                  }).encode()
+                  for attempt in range(30):
+                      try:
+                          req = urllib.request.Request(f"{NRF_ENDPOINT}/nnrf-nfm/v1/nf-instances",
+                                                      data=payload, headers={"Content-Type": "application/json"}, method="POST")
+                          resp = urllib.request.urlopen(req, timeout=5)
+                          nrf_available = True
+                          print(f"INFO: AMF registered with NRF | instance={NF_INSTANCE_ID} | plmn={PLMN_ID}", flush=True)
+                          return
+                      except Exception as e:
+                          print(f"WARN: AMF NRF registration attempt {attempt+1}/30 failed: {e}", flush=True)
+                          time.sleep(5)
+                  print(f"ERROR: AMF failed to register with NRF after 30 attempts", flush=True)
+
+              def discover_smf():
+                  """Discover SMF via NRF."""
+                  global smf_address, nrf_available
+                  try:
+                      req = urllib.request.Request(f"{NRF_ENDPOINT}/nnrf-disc/v1/nf-instances?target-nf-type=SMF&requester-nf-type=AMF")
+                      resp = urllib.request.urlopen(req, timeout=5)
+                      data = json.loads(resp.read())
+                      instances = data.get("nfInstances", [])
+                      if instances:
+                          smf_address = instances[0].get("ipv4Addresses", ["smf:8080"])[0]
+                          nrf_available = True
+                          return smf_address
+                      return None
+                  except Exception as e:
+                      nrf_available = False
+                      print(f"ERROR: AMF NRF discovery failed for SMF: {e} | instance={NF_INSTANCE_ID}", flush=True)
+                      return None
+
+              def nrf_health_loop():
+                  """Periodically re-discover SMF to keep address fresh."""
+                  global nrf_available
+                  while True:
+                      time.sleep(10)
+                      try:
+                          req = urllib.request.Request(f"{NRF_ENDPOINT}/health")
+                          resp = urllib.request.urlopen(req, timeout=3)
+                          nrf_available = resp.status == 200
+                      except:
+                          nrf_available = False
+
+              class Handler(http.server.BaseHTTPRequestHandler):
+                  def do_POST(self):
+                      global ue_counter, registration_errors
+
+                      if self.path == "/namf-comm/v1/ue-registrations":
+                          # UE Registration (N1/N2 from RAN)
+                          ue_counter += 1
+                          supi = f"imsi-{PLMN_ID}{ue_counter:010d}"
+                          length = int(self.headers.get("Content-Length", 0))
+                          body = json.loads(self.rfile.read(length)) if length else {}
+
+                          # Step 1: Discover SMF via NRF
+                          smf = discover_smf()
+                          if not smf:
+                              registration_errors += 1
+                              print(f"ERROR: UE registration failed - NRF unavailable | SUPI={supi} | errors={registration_errors}", flush=True)
+                              self.send_response(503)
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"error": "Service unavailable", "cause": "NRF_DISCOVERY_FAILURE", "supi": supi}).encode())
+                              return
+
+                          # Step 2: Create session via SMF (N11)
+                          try:
+                              session_payload = json.dumps({"supi": supi, "dnn": "internet", "sNssai": {"sst": 1, "sd": "000001"}}).encode()
+                              req = urllib.request.Request(f"http://{smf}/nsmf-pdusession/v1/sm-contexts",
+                                                          data=session_payload, headers={"Content-Type": "application/json"}, method="POST")
+                              resp = urllib.request.urlopen(req, timeout=5)
+                              print(f"INFO: UE registered successfully | SUPI={supi} | SMF={smf} | 5G-GUTI=5g-guti-{ue_counter:08d}", flush=True)
+                              self.send_response(200)
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"supi": supi, "guti": f"5g-guti-{ue_counter:08d}", "registrationResult": "3GPP_ACCESS"}).encode())
+                          except Exception as e:
+                              registration_errors += 1
+                              print(f"ERROR: PDU session establishment failed via N11 | SUPI={supi} | SMF={smf} | error={e}", flush=True)
+                              self.send_response(502)
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"error": "SMF unreachable", "cause": "N11_FAILURE", "supi": supi}).encode())
+                          return
+
+                      self.send_response(404)
+                      self.end_headers()
+
+                  def do_GET(self):
+                      if self.path == "/health":
+                          status = 200 if nrf_available else 503
+                          self.send_response(status)
+                          self.end_headers()
+                          self.wfile.write(json.dumps({
+                              "status": "healthy" if nrf_available else "degraded",
+                              "nfType": "AMF",
+                              "instance": NF_INSTANCE_ID,
+                              "nrfConnected": nrf_available,
+                              "ueRegistrations": ue_counter,
+                              "errors": registration_errors
+                          }).encode())
+                          return
+                      self.send_response(404)
+                      self.end_headers()
+
+                  def log_message(self, format, *args): pass
+
+              print(f"INFO: AMF starting | instance={NF_INSTANCE_ID} | PLMN={PLMN_ID}", flush=True)
+              threading.Thread(target=register_with_nrf, daemon=True).start()
+              threading.Thread(target=nrf_health_loop, daemon=True).start()
+              print(f"INFO: AMF ready - accepting UE registrations on N1/N2 interface", flush=True)
+              http.server.HTTPServer(("", 8080), Handler).serve_forever()
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 128m
+              memory: 128Mi
+            limits:
+              cpu: 512m
+              memory: 192Mi
+          env:
+            - name: NRF_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: core-config
+                  key: nrf-endpoint
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: amf
+  namespace: demo-5g
+spec:
+  selector:
+    app: amf
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP
+---
+# HPA on AMF — Scenario 4 target (scaling storm during busy hour)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: amf-hpa
+  namespace: demo-5g
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: amf
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 60

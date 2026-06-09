@@ -1,0 +1,155 @@
+# =============================================================================
+# UPF — User Plane Function
+# Forwards user data packets. Receives PDR/FAR rules from SMF via N4.
+# Simplest stub — just accepts rules and logs packet forwarding stats.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: upf
+  namespace: demo-5g
+  labels:
+    app: upf
+    nf-type: upf
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: upf
+  template:
+    metadata:
+      labels:
+        app: upf
+        nf-type: upf
+    spec:
+      nodeSelector:
+        role: app
+      containers:
+        - name: upf
+          image: python:3.12-slim
+          command:
+            - python
+            - -c
+            - |
+              import http.server, json, threading, time, os, urllib.request
+
+              NRF_ENDPOINT = os.environ.get("NRF_ENDPOINT", "http://nrf:8080")
+              NF_INSTANCE_ID = os.environ.get("HOSTNAME", "upf-unknown")
+
+              active_sessions = 0
+              total_pdr_rules = 0
+
+              def register_with_nrf():
+                  payload = json.dumps({
+                      "nfType": "UPF",
+                      "nfInstanceId": NF_INSTANCE_ID,
+                      "nfStatus": "REGISTERED",
+                      "ipv4Addresses": ["upf:8080"],
+                      "fqdn": "upf.demo-5g.svc.cluster.local",
+                      "upfInfo": {"sNssaiUpfInfoList": [{"sNssai": {"sst": 1}, "dnnUpfInfoList": [{"dnn": "internet"}]}]}
+                  }).encode()
+                  for attempt in range(30):
+                      try:
+                          req = urllib.request.Request(f"{NRF_ENDPOINT}/nnrf-nfm/v1/nf-instances",
+                                                      data=payload, headers={"Content-Type": "application/json"}, method="POST")
+                          urllib.request.urlopen(req, timeout=5)
+                          print(f"INFO: UPF registered with NRF | instance={NF_INSTANCE_ID}", flush=True)
+                          return
+                      except Exception as e:
+                          print(f"WARN: UPF NRF registration attempt {attempt+1}/30 failed: {e}", flush=True)
+                          time.sleep(5)
+                  print(f"ERROR: UPF failed to register with NRF after 30 attempts", flush=True)
+
+              def stats_loop():
+                  """Periodically log forwarding stats like a real UPF."""
+                  while True:
+                      time.sleep(30)
+                      if active_sessions > 0:
+                          print(f"INFO: UPF forwarding stats | active_sessions={active_sessions} | pdr_rules={total_pdr_rules} | uplink_bytes=0 | downlink_bytes=0", flush=True)
+
+              class Handler(http.server.BaseHTTPRequestHandler):
+                  def do_POST(self):
+                      global active_sessions, total_pdr_rules
+
+                      if self.path == "/nupf/v1/pdr-rules":
+                          # N4 Session Establishment from SMF
+                          length = int(self.headers.get("Content-Length", 0))
+                          body = json.loads(self.rfile.read(length)) if length else {}
+                          pdu_session_id = body.get("pduSessionId", 0)
+                          supi = body.get("supi", "unknown")
+                          dnn = body.get("dnn", "internet")
+
+                          active_sessions += 1
+                          total_pdr_rules += 1
+
+                          print(f"INFO: PDR rule installed | PDU-SESSION-ID=pdu-{pdu_session_id:05d} | SUPI={supi} | DNN={dnn} | TEID={body.get('uplinkTeid', 0)} | action=FORWARD", flush=True)
+                          self.send_response(201)
+                          self.end_headers()
+                          self.wfile.write(json.dumps({"status": "installed", "pduSessionId": pdu_session_id}).encode())
+                          return
+
+                      self.send_response(404)
+                      self.end_headers()
+
+                  def do_GET(self):
+                      if self.path == "/health":
+                          self.send_response(200)
+                          self.end_headers()
+                          self.wfile.write(json.dumps({
+                              "status": "healthy",
+                              "nfType": "UPF",
+                              "instance": NF_INSTANCE_ID,
+                              "activeSessions": active_sessions,
+                              "pdrRules": total_pdr_rules
+                          }).encode())
+                          return
+                      self.send_response(404)
+                      self.end_headers()
+
+                  def log_message(self, format, *args): pass
+
+              print(f"INFO: UPF starting | instance={NF_INSTANCE_ID}", flush=True)
+              threading.Thread(target=register_with_nrf, daemon=True).start()
+              threading.Thread(target=stats_loop, daemon=True).start()
+              print(f"INFO: UPF ready - accepting N4 PDR rules from SMF", flush=True)
+              http.server.HTTPServer(("", 8080), Handler).serve_forever()
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 64m
+              memory: 64Mi
+            limits:
+              cpu: 128m
+              memory: 128Mi
+          env:
+            - name: NRF_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: core-config
+                  key: nrf-endpoint
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: upf
+  namespace: demo-5g
+spec:
+  selector:
+    app: upf
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP

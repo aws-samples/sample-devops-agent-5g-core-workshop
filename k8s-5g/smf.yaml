@@ -1,0 +1,192 @@
+# =============================================================================
+# SMF — Session Management Function
+# Manages PDU sessions. Receives requests from AMF (N11), provisions UPF (N4).
+# Publishes session events to SQS.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: smf
+  namespace: demo-5g
+  labels:
+    app: smf
+    nf-type: smf
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: smf
+  template:
+    metadata:
+      labels:
+        app: smf
+        nf-type: smf
+    spec:
+      nodeSelector:
+        role: app
+      containers:
+        - name: smf
+          image: python:3.12-slim
+          command:
+            - python
+            - -c
+            - |
+              import http.server, json, threading, time, os, urllib.request, urllib.error
+
+              NRF_ENDPOINT = os.environ.get("NRF_ENDPOINT", "http://nrf:8080")
+              UPF_ENDPOINT = os.environ.get("UPF_ENDPOINT", "http://upf:8080")
+              NF_INSTANCE_ID = os.environ.get("HOSTNAME", "smf-unknown")
+
+              nrf_available = False
+              session_counter = 0
+              session_errors = 0
+
+              def register_with_nrf():
+                  global nrf_available
+                  payload = json.dumps({
+                      "nfType": "SMF",
+                      "nfInstanceId": NF_INSTANCE_ID,
+                      "nfStatus": "REGISTERED",
+                      "ipv4Addresses": ["smf:8080"],
+                      "fqdn": "smf.demo-5g.svc.cluster.local",
+                      "snssais": [{"sst": 1, "sd": "000001"}]
+                  }).encode()
+                  for attempt in range(30):
+                      try:
+                          req = urllib.request.Request(f"{NRF_ENDPOINT}/nnrf-nfm/v1/nf-instances",
+                                                      data=payload, headers={"Content-Type": "application/json"}, method="POST")
+                          urllib.request.urlopen(req, timeout=5)
+                          nrf_available = True
+                          print(f"INFO: SMF registered with NRF | instance={NF_INSTANCE_ID}", flush=True)
+                          return
+                      except Exception as e:
+                          print(f"WARN: SMF NRF registration attempt {attempt+1}/30 failed: {e}", flush=True)
+                          time.sleep(5)
+                  print(f"ERROR: SMF failed to register with NRF after 30 attempts", flush=True)
+
+              def provision_upf(supi, pdu_session_id, dnn):
+                  """Send N4 session establishment to UPF."""
+                  try:
+                      payload = json.dumps({"pduSessionId": pdu_session_id, "supi": supi, "dnn": dnn, "qfi": 1, "uplinkTeid": pdu_session_id + 1000}).encode()
+                      req = urllib.request.Request(f"{UPF_ENDPOINT}/nupf/v1/pdr-rules",
+                                                  data=payload, headers={"Content-Type": "application/json"}, method="POST")
+                      urllib.request.urlopen(req, timeout=5)
+                      return True
+                  except Exception as e:
+                      print(f"ERROR: N4 session establishment to UPF failed | PDU-SESSION-ID={pdu_session_id} | error={e}", flush=True)
+                      return False
+
+              class Handler(http.server.BaseHTTPRequestHandler):
+                  def do_POST(self):
+                      global session_counter, session_errors
+
+                      if self.path == "/nsmf-pdusession/v1/sm-contexts":
+                          # PDU Session Establishment (from AMF via N11)
+                          length = int(self.headers.get("Content-Length", 0))
+                          body = json.loads(self.rfile.read(length)) if length else {}
+                          supi = body.get("supi", "unknown")
+                          dnn = body.get("dnn", "internet")
+                          snssai = body.get("sNssai", {})
+
+                          session_counter += 1
+                          pdu_session_id = session_counter
+
+                          # Discover PCF for QoS policy (optional, non-blocking)
+                          try:
+                              req = urllib.request.Request(f"{NRF_ENDPOINT}/nnrf-disc/v1/nf-instances?target-nf-type=PCF&requester-nf-type=SMF")
+                              urllib.request.urlopen(req, timeout=3)
+                          except:
+                              pass  # PCF optional for session establishment
+
+                          # Provision UPF via N4
+                          upf_ok = provision_upf(supi, pdu_session_id, dnn)
+                          if not upf_ok:
+                              session_errors += 1
+                              print(f"ERROR: PDU session establishment failed | PDU-SESSION-ID=pdu-{pdu_session_id:05d} | SUPI={supi} | DNN={dnn} | cause=N4_FAILURE", flush=True)
+                              self.send_response(500)
+                              self.end_headers()
+                              self.wfile.write(json.dumps({"error": "UPF provisioning failed", "cause": "N4_SESSION_ESTABLISHMENT_FAILURE"}).encode())
+                              return
+
+                          print(f"INFO: PDU session established | PDU-SESSION-ID=pdu-{pdu_session_id:05d} | SUPI={supi} | DNN={dnn} | S-NSSAI=sst:{snssai.get('sst',1)}/sd:{snssai.get('sd','000001')} | QFI=1", flush=True)
+                          self.send_response(201)
+                          self.end_headers()
+                          self.wfile.write(json.dumps({
+                              "pduSessionId": pdu_session_id,
+                              "supi": supi,
+                              "dnn": dnn,
+                              "pduSessionType": "IPV4",
+                              "sessionAmbr": {"uplink": "100 Mbps", "downlink": "200 Mbps"}
+                          }).encode())
+                          return
+
+                      self.send_response(404)
+                      self.end_headers()
+
+                  def do_GET(self):
+                      if self.path == "/health":
+                          self.send_response(200)
+                          self.end_headers()
+                          self.wfile.write(json.dumps({
+                              "status": "healthy",
+                              "nfType": "SMF",
+                              "instance": NF_INSTANCE_ID,
+                              "nrfRegistered": nrf_available,
+                              "pduSessions": session_counter,
+                              "errors": session_errors
+                          }).encode())
+                          return
+                      self.send_response(404)
+                      self.end_headers()
+
+                  def log_message(self, format, *args): pass
+
+              print(f"INFO: SMF starting | instance={NF_INSTANCE_ID}", flush=True)
+              threading.Thread(target=register_with_nrf, daemon=True).start()
+              print(f"INFO: SMF ready - accepting PDU session requests on N11 interface", flush=True)
+              http.server.HTTPServer(("", 8080), Handler).serve_forever()
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 128m
+              memory: 128Mi
+            limits:
+              cpu: 256m
+              memory: 256Mi
+          env:
+            - name: NRF_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: core-config
+                  key: nrf-endpoint
+            - name: UPF_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: core-config
+                  key: upf-endpoint
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: smf
+  namespace: demo-5g
+spec:
+  selector:
+    app: smf
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP

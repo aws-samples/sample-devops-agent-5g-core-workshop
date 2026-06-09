@@ -1,0 +1,23 @@
+# Terraform
+terraform/.terraform/
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/terraform.tfvars
+terraform/.terraform.lock.hcl
+
+# OS
+.DS_Store
+*.swp
+*.swo
+
+# Session state (local dev only)
+SESSION-STATE.md
+
+# Retail version (not part of workshop)
+k8s/
+scripts/
+
+# Credentials / secrets
+*.pem
+*.key
+.env
