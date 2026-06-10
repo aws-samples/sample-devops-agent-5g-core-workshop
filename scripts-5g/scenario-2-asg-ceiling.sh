@@ -50,26 +50,24 @@ case "${1:-inject}" in
     APP_ASG=$(get_app_asg_name)
     echo "  App ASG: ${APP_ASG}"
 
-    # Cap ASG at current desired (prevent node scale-out)
-    CURRENT_DESIRED=$(aws autoscaling describe-auto-scaling-groups \
-      --auto-scaling-group-names "$APP_ASG" \
-      --region "${REGION}" \
-      --query "AutoScalingGroups[0].DesiredCapacity" --output text)
-
-    echo "  Current desired capacity: ${CURRENT_DESIRED}"
-    echo ""
-
+    # Cap ASG at 2 nodes and scale down to 2 (simulate pre-existing capacity constraint)
     aws autoscaling update-auto-scaling-group \
       --auto-scaling-group-name "$APP_ASG" \
-      --max-size "$CURRENT_DESIRED" \
+      --min-size 2 \
+      --max-size 2 \
+      --desired-capacity 2 \
       --region "${REGION}"
-    echo "  ✗ ASG max capped at ${CURRENT_DESIRED} (no new nodes possible)"
+    echo "  ✗ ASG capped at max=2 (simulating cost-control policy)"
+
+    # Wait for extra node to drain
+    echo "  ⏳ Waiting for node scale-in (30s)..."
+    sleep 30
 
     # Remove HPA so manual scaling simulates ops team response
     kubectl delete hpa amf-hpa -n ${NAMESPACE} 2>/dev/null || true
     echo "  ✗ AMF HPA removed (simulating manual capacity increase)"
 
-    # Scale AMF beyond what nodes can handle
+    # Scale AMF beyond what 2 nodes can handle
     kubectl scale deployment amf -n ${NAMESPACE} --replicas=8
     echo "  ✗ AMF scaled to 8 replicas (simulating busy hour demand)"
 

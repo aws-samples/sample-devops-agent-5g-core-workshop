@@ -18,6 +18,11 @@ A simulated 5G Core network (AMF, SMF, UPF, NRF, PCF) running on EKS with Elasti
 ![verify.sh output](docs/images/verify-output.png)
 
 ```bash
+# 0. Clone
+git clone https://github.com/modaoud/devops-agent-eks-demo.git
+cd devops-agent-eks-demo
+chmod +x deploy.sh verify.sh scripts-5g/*.sh
+
 # 1. Infrastructure (~10 min)
 cd terraform/
 cp terraform.tfvars.example terraform.tfvars
@@ -25,7 +30,6 @@ terraform init && terraform apply
 
 # 2. Application (~2 min)
 cd ..
-chmod +x deploy.sh verify.sh scripts-5g/*.sh
 ./deploy.sh
 
 # 3. Verify
