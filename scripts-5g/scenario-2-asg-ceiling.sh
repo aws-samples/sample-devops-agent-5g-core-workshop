@@ -107,9 +107,11 @@ case "${1:-inject}" in
 
     aws autoscaling update-auto-scaling-group \
       --auto-scaling-group-name "$APP_ASG" \
+      --min-size 2 \
       --max-size 3 \
+      --desired-capacity 2 \
       --region "${REGION}"
-    echo "  ✓ ASG max restored to 3"
+    echo "  ✓ ASG restored (min=2, max=3, desired=2)"
 
     kubectl scale deployment amf -n ${NAMESPACE} --replicas=2
     echo "  ✓ AMF scaled back to 2 replicas"
