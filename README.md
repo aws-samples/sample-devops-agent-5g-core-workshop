@@ -8,10 +8,10 @@ A simulated 5G Core network (AMF, SMF, UPF, NRF, PCF) running on EKS with Elasti
 
 | Scenario | Telco Impact | Root Cause | Agent Finds | Time |
 |----------|-------------|------------|-------------|------|
-| 1. SG Change | NRF registry offline → all NF discovery fails → total 5G core outage | Security Group blocks Redis port 6379 | CloudTrail: who revoked the rule, when, from which IP | ~2 min |
-| 2. ASG Ceiling | AMF can't scale during busy hour → UE registration timeouts | ASG max capped at current node count | ASG maxSize limit, node saturation at 17/17 pods, Cluster Autoscaler blocked | ~4 min |
-| 3. Bad Deploy | AMF fleet down → no subscriber registrations or handovers | Non-existent image tag pushed via kubectl | EKS audit log: exact `kubectl set image` command, user, IP, kubectl version | ~3 min |
-| 4. Scaling Storm | Intermittent PDU session failures during busy hour (oscillating) | HPA target 15% + 0s stabilization window | Feedback loop mechanism, NRF connection pooling bug (450× Redis connection spike) | ~8 min |
+| 1. SG Change | NRF registry offline → all NF discovery fails → total 5G core outage | Security Group blocks Redis port 6379 | Traces NRF→Redis connectivity loss to specific SG change via CloudTrail — identifies who, when, and from where | ~2 min |
+| 2. ASG Ceiling | AMF can't scale during busy hour → UE registration timeouts | ASG max capped at current node count | Correlates AMF FailedScheduling with ASG capacity limit — explains why Cluster Autoscaler can't provision nodes for 5G UE registration busy hour demand | ~4 min |
+| 3. Bad Deploy | AMF fleet down → no subscriber registrations or handovers | Non-existent image tag pushed via kubectl | Traces AMF pod failures to a bad image tag pushed during an AMF upgrade — identifies the exact command and user via EKS audit logs | ~3 min |
+| 4. Scaling Storm | Intermittent PDU session failures during busy hour (oscillating) | HPA target 15% + 0s stabilization window | Explains AMF HPA feedback loop causing Nnrf discovery disruptions — identifies NRF connection pool churn during scaling oscillation | ~8 min |
 
 ## Quick Start
 
