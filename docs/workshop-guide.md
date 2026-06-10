@@ -102,6 +102,8 @@ This step is manual (learning objective: understand Agent Space setup).
    - Name: `5g-core-demo`
    - Let it auto-create the IAM role
 
+   ![Create Agent Space](images/create-agent-space.png)
+
 2. **Capabilities → Cloud → Primary Source**
    - Select your account
    - Validate connection (green check)
@@ -110,6 +112,8 @@ This step is manual (learning objective: understand Agent Space setup).
    - IAM Principal ARN: copy from Agent Space capabilities page
    - Access Policy: `AmazonAIOpsAssistantPolicy`
    - Scope: **Cluster**
+
+   ![EKS Access Entry](images/eks-access-entry.png)
 
 4. **Verify** — back in Agent Space, ask:
    > "List all pods in the demo-5g namespace"
@@ -140,6 +144,8 @@ In Agent Space → **Topology** tab, confirm you see:
 1. Open **CloudWatch → Alarms** in a browser tab (filter: `5G-Core-*`)
 2. Open **Agent Space** in another tab
 3. Confirm all alarms are in OK state: `./verify.sh`
+
+![CloudWatch Alarms Firing](images/alarms-firing.png)
 
 ### Scenario flow (same for all 4)
 

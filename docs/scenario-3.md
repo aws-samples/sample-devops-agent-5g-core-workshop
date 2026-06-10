@@ -2,15 +2,25 @@
 
 ## Story
 
-A developer pushes a new AMF image tag that doesn't exist in the registry. The deployment rolls forward, new pods fail with ImagePullBackOff, and the old pods are terminated by the rollout. The entire AMF fleet is down — subscribers can't register.
+A developer pushes a new AMF image tag that doesn't exist in the registry — perhaps a typo in the CI/CD pipeline or a premature rollout of an untested build. The deployment rolls forward, new pods fail with ImagePullBackOff, and the old pods are terminated by the rollout strategy. The entire AMF fleet is down — every UE registration and handover request fails. In a production network, this means **no subscriber can attach or move between cells**.
 
 ## Failure Chain
 
 ```
-kubectl set image → AMF deployment updated → new pods created
-→ ImagePullBackOff (tag doesn't exist) → old pods terminated
-→ AMF completely unavailable → all UE registrations fail
+kubectl set image (bad tag) → AMF deployment rolls forward
+→ New pods: ImagePullBackOff (tag doesn't exist in ECR)
+→ Old pods terminated by rollout strategy
+→ AMF replicas = 0 available → N1/N2 interface completely down
+→ All UE registrations rejected → all inter-cell handovers fail
+→ Active subscribers lose connectivity on cell change
 ```
+
+## Impact (Telco Terms)
+
+- **Affected:** All subscribers — registrations AND mobility
+- **Symptom:** UE Registration Reject, Handover Failure, Service Request timeout
+- **KPI impact:** Attach Success Rate → 0%, Handover Success Rate → 0%
+- **Severity:** P1 — AMF total outage, equivalent to losing an entire MME pool in 4G
 
 ## Alarms Expected
 

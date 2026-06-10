@@ -2,15 +2,24 @@
 
 ## Story
 
-During a routine security audit, a team member tightened Security Group rules on the ElastiCache Redis cluster — accidentally blocking the pod subnet CIDRs. The NRF (Network Repository Function) loses its Redis backend, causing a cascade failure across the entire 5G core.
+During a routine security audit, a team member tightened Security Group rules on the ElastiCache Redis cluster — accidentally blocking the pod subnet CIDRs. The NRF (Network Repository Function) loses its Redis backend, causing a cascade failure across the entire 5G core. In a production network, this would be a **total service outage** — no subscriber can register, establish data sessions, or hand over between cells.
 
 ## Failure Chain
 
 ```
-SG rule revoked → NRF can't reach Redis → NRF returns 503
-→ AMF/SMF can't discover peers via Nnrf → PDU session setup fails
-→ All subscriber registrations fail
+SG rule revoked → NRF can't reach Redis → NRF service registry offline
+→ AMF/SMF Nnrf discovery fails (no peer resolution)
+→ N11 (AMF→SMF) session setup impossible
+→ PDU session establishment fails for ALL subscribers
+→ No UE can attach to network or establish data bearer
 ```
+
+## Impact (Telco Terms)
+
+- **Affected:** All subscribers across all slices (S-NSSAI)
+- **Symptom:** UE registration timeouts, PDU session setup rejected
+- **KPI impact:** Attach Success Rate → 0%, PDU Setup Success Rate → 0%
+- **Severity:** P1 — total core outage, all network services down
 
 ## Alarms Expected
 
@@ -63,6 +72,14 @@ Paste into the DevOps Agent Space:
 - Agent correlated **infrastructure** (SG change) with **application** (pod failures)
 - CloudTrail integration identified WHO made the change — critical for NOC/L2 triage
 - Agent understood the NRF→Redis→cascade dependency without being told
+
+**Agent Investigation Output:**
+
+![Scenario 1 - Investigation](images/scenario-1-investigation_1.png)
+![Scenario 1 - Tracing](images/scenario-1-investigation_2.png)
+![Scenario 1 - CloudTrail](images/scenario-1-investigation_3.png)
+![Scenario 1 - Findings](images/scenario-1-investigation_4.png)
+![Scenario 1 - Root Cause](images/scenario-1-investigation_root-cause.png)
 
 ### Restore
 

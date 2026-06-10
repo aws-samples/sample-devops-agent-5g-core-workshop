@@ -2,15 +2,24 @@
 
 ## Story
 
-Peak busy hour traffic arrives. The AMF HPA tries to scale up to handle subscriber registrations, but the underlying Auto Scaling Group is capped at its current node count. New AMF pods are stuck in Pending — subscribers experience registration timeouts.
+Peak busy hour traffic arrives — thousands of UEs simultaneously attaching to the network. The AMF HPA tries to scale up to handle the surge of Initial Registration and Service Request messages, but the underlying Auto Scaling Group is capped at its current node count. New AMF pods are stuck in Pending — subscribers experience registration timeouts as existing AMF instances are overloaded beyond their capacity.
 
 ## Failure Chain
 
 ```
-UE load spike → HPA requests more AMF replicas → scheduler can't place them
-→ FailedScheduling: Insufficient cpu → nodes at capacity → ASG at maxSize
-→ Cluster Autoscaler blocked → subscriber registrations queue and timeout
+Busy hour UE attach storm → AMF CPU spikes → HPA requests more AMF replicas
+→ Scheduler can't place pods: Insufficient cpu + Too many pods
+→ Nodes at capacity → ASG at maxSize → Cluster Autoscaler blocked
+→ Existing AMF pods overloaded → N1/N2 processing delays
+→ UE Registration Accept timeout → subscriber attach failures
 ```
+
+## Impact (Telco Terms)
+
+- **Affected:** New subscriber registrations during busy hour
+- **Symptom:** UE Initial Registration timeout, Service Request delays
+- **KPI impact:** Attach Success Rate drops, Registration Latency spikes
+- **Severity:** P2 — degraded capacity, existing sessions maintained but no new attachments
 
 ## Alarms Expected
 

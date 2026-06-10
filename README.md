@@ -15,6 +15,8 @@ A simulated 5G Core network (AMF, SMF, UPF, NRF, PCF) running on EKS with Elasti
 
 ## Quick Start
 
+![verify.sh output](docs/images/verify-output.png)
+
 ```bash
 # 1. Infrastructure (~10 min)
 cd terraform/

@@ -91,6 +91,8 @@ AWS DevOps Agent is an AI-powered operations assistant that investigates inciden
 
 ### How It Investigates
 
+![DevOps Agent Topology View](images/topology-overview.png)
+
 You give it a symptom: *"AMF pods are failing."* It then:
 
 1. Checks pod status and events
