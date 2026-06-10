@@ -13,16 +13,26 @@ A simulated 5G Core network (AMF, SMF, UPF, NRF, PCF) running on EKS with Elasti
 | 3. Bad Deploy | AMF fleet down → no subscriber registrations or handovers | Non-existent image tag pushed via kubectl | Traces AMF pod failures to a bad image tag pushed during an AMF upgrade — identifies the exact command and user via EKS audit logs | ~3 min |
 | 4. Scaling Storm | Intermittent PDU session failures during busy hour (oscillating) | HPA target 15% + 0s stabilization window | Explains AMF HPA feedback loop causing Nnrf discovery disruptions — identifies NRF connection pool churn during scaling oscillation | ~8 min |
 
+## Prerequisites
+
+You need an AWS account with admin access and a few CLI tools on your laptop. Not sure if you have everything? Run the check:
+
+```bash
+git clone https://github.com/modaoud/devops-agent-eks-demo.git
+cd devops-agent-eks-demo
+chmod +x prerequisites.sh deploy.sh verify.sh scripts-5g/*.sh
+./prerequisites.sh
+```
+
+It checks for: AWS CLI, Terraform, kubectl, Helm, jq, and valid AWS credentials. If anything is missing, it shows the install command for your OS (macOS or Linux).
+
+**Cost:** ~$5/hour while the cluster is running. Destroy when done.
+
 ## Quick Start
 
 ![verify.sh output](docs/images/verify-output.png)
 
 ```bash
-# 0. Clone
-git clone https://github.com/modaoud/devops-agent-eks-demo.git
-cd devops-agent-eks-demo
-chmod +x deploy.sh verify.sh scripts-5g/*.sh
-
 # 1. Infrastructure (~10 min)
 cd terraform/
 cp terraform.tfvars.example terraform.tfvars
@@ -53,12 +63,6 @@ cd ..
 ├── deploy.sh               Post-Terraform K8s deployment
 └── verify.sh               Health check
 ```
-
-## Prerequisites
-
-- AWS account (Isengard or standard — admin access needed)
-- Terraform ≥ 1.5, AWS CLI v2, kubectl, helm, jq
-- ~$5/hour while running
 
 ## Documentation
 
