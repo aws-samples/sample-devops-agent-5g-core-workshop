@@ -60,6 +60,9 @@ A fully instrumented 5G Core network on EKS, then use AWS DevOps Agent to invest
 git clone <REPO_URL>
 cd devops-agent-eks-demo
 
+# Make scripts executable
+chmod +x deploy.sh verify.sh scripts-5g/*.sh
+
 cd terraform/
 cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars — set region (default: us-east-1)

@@ -23,6 +23,7 @@ terraform init && terraform apply
 
 # 2. Application (~2 min)
 cd ..
+chmod +x deploy.sh verify.sh scripts-5g/*.sh
 ./deploy.sh
 
 # 3. Verify
