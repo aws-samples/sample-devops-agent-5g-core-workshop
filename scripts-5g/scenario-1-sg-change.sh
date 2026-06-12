@@ -25,6 +25,7 @@ case "${1:-inject}" in
 
     SG_ID=$(terraform -chdir="${SCRIPT_DIR}/../terraform" output -raw redis_security_group_id)
     CIDRS=$(terraform -chdir="${SCRIPT_DIR}/../terraform" output -json vpc_private_subnet_cidrs | jq -r '.[]')
+    REGION=$(terraform -chdir="${SCRIPT_DIR}/../terraform" output -raw region)
 
     echo "  Security Group: ${SG_ID}"
     echo "  Action: Revoking inbound port 6379 from pod CIDRs"
@@ -35,7 +36,7 @@ case "${1:-inject}" in
     aws ec2 revoke-security-group-ingress \
       --group-id "$SG_ID" \
       --ip-permissions "[{\"IpProtocol\":\"tcp\",\"FromPort\":6379,\"ToPort\":6379,\"IpRanges\":${IP_RANGES}}]" \
-      --region us-east-1 > /dev/null
+      --region "$REGION" > /dev/null
 
     for cidr in $CIDRS; do
       echo "  ✗ Revoked: ${cidr} → port 6379"
@@ -70,13 +71,14 @@ case "${1:-inject}" in
 
     SG_ID=$(terraform -chdir="${SCRIPT_DIR}/../terraform" output -raw redis_security_group_id)
     CIDRS=$(terraform -chdir="${SCRIPT_DIR}/../terraform" output -json vpc_private_subnet_cidrs | jq -r '.[]')
+    REGION=$(terraform -chdir="${SCRIPT_DIR}/../terraform" output -raw region)
 
     IP_RANGES=$(echo "$CIDRS" | jq -R '{"CidrIp": ., "Description": "Redis from EKS pods"}' | jq -s '.')
 
     aws ec2 authorize-security-group-ingress \
       --group-id "$SG_ID" \
       --ip-permissions "[{\"IpProtocol\":\"tcp\",\"FromPort\":6379,\"ToPort\":6379,\"IpRanges\":${IP_RANGES}}]" \
-      --region us-east-1 > /dev/null
+      --region "$REGION" > /dev/null
 
     for cidr in $CIDRS; do
       echo "  ✓ Restored: ${cidr} → port 6379"

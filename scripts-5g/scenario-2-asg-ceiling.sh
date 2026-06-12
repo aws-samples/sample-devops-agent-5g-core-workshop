@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 CLUSTER_NAME=$(terraform -chdir="${SCRIPT_DIR}/../terraform" output -raw cluster_name)
-REGION="us-east-1"
+REGION=$(terraform -chdir="${SCRIPT_DIR}/../terraform" output -raw region)
 NAMESPACE="demo-5g"
 
 get_app_asg_name() {
