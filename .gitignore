@@ -13,7 +13,7 @@ terraform/.terraform.lock.hcl
 # Session state (local dev only)
 SESSION-STATE.md
 
-# Retail version (not part of workshop)
+# Retail version (not part of 5G workshop)
 k8s/
 scripts/
 

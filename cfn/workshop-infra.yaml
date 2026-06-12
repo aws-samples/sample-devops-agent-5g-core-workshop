@@ -1,0 +1,255 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AWS DevOps Agent — 5G Core EKS Troubleshooting Workshop.
+  Launches a bootstrap EC2 instance that provisions the full workshop environment
+  (VPC, EKS, Redis, 5G NFs) via Terraform. Stack completes when environment is ready.
+
+Parameters:
+  RepositoryUrl:
+    Type: String
+    Default: https://github.com/aws-samples/sample-devops-agent-5g-core-workshop.git
+    Description: Workshop source code repository URL
+
+  RepositoryBranch:
+    Type: String
+    Default: main
+    Description: Git branch to clone
+
+  InstanceType:
+    Type: String
+    Default: t3.large
+    AllowedValues: [t3.medium, t3.large, m5.large]
+    Description: EC2 instance type for the bootstrap workstation
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Amazon Linux 2023 AMI (latest)
+
+Resources:
+  # --- VPC for the workstation (minimal — just needs internet + SSM) ----------
+  WorkstationVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.31.0.0/24
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-workstation-vpc'
+
+  WorkstationSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WorkstationVPC
+      CidrBlock: 172.31.0.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-workstation-subnet'
+
+  WorkstationIGW:
+    Type: AWS::EC2::InternetGateway
+
+  WorkstationIGWAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref WorkstationVPC
+      InternetGatewayId: !Ref WorkstationIGW
+
+  WorkstationRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref WorkstationVPC
+
+  WorkstationRoute:
+    Type: AWS::EC2::Route
+    DependsOn: WorkstationIGWAttach
+    Properties:
+      RouteTableId: !Ref WorkstationRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref WorkstationIGW
+
+  WorkstationSubnetRTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref WorkstationSubnet
+      RouteTableId: !Ref WorkstationRouteTable
+
+  # --- IAM Role ---------------------------------------------------------------
+  WorkstationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-workstation'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Workshop
+          Value: devops-agent-5g-core
+
+  WorkstationInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref WorkstationRole
+
+  # --- Security Group ---------------------------------------------------------
+  WorkstationSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Workshop workstation — egress only (SSM for access)
+      VpcId: !Ref WorkstationVPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-workstation'
+
+  # --- Wait Condition ---------------------------------------------------------
+  WaitHandle:
+    Type: AWS::CloudFormation::WaitConditionHandle
+
+  WaitCondition:
+    Type: AWS::CloudFormation::WaitCondition
+    DependsOn: WorkstationInstance
+    Properties:
+      Handle: !Ref WaitHandle
+      Timeout: '2400'
+
+  # --- EC2 Instance -----------------------------------------------------------
+  WorkstationInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref LatestAmiId
+      IamInstanceProfile: !Ref WorkstationInstanceProfile
+      SubnetId: !Ref WorkstationSubnet
+      SecurityGroupIds:
+        - !Ref WorkstationSG
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-workstation'
+        - Key: Workshop
+          Value: devops-agent-5g-core
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+
+          REPO_URL="${RepositoryUrl}"
+          REPO_BRANCH="${RepositoryBranch}"
+          AWS_DEFAULT_REGION="${AWS::Region}"
+          export AWS_DEFAULT_REGION
+          CFN_SIGNAL_URL="${WaitHandle}"
+          WORKSHOP_DIR="/opt/workshop"
+          STATUS_FILE="${!WORKSHOP_DIR}/status.txt"
+          LOG_FILE="/var/log/workshop-setup.log"
+
+          mkdir -p "${!WORKSHOP_DIR}"
+
+          update_status() {
+            echo "$1" | tee "${!STATUS_FILE}"
+            echo "[$(date '+%H:%M:%S')] $1" >> "${!LOG_FILE}"
+          }
+
+          signal_success() {
+            curl -X PUT -H 'Content-Type:' \
+              --data-binary '{"Status":"SUCCESS","Reason":"Workshop environment ready","UniqueId":"bootstrap","Data":"complete"}' \
+              "${!CFN_SIGNAL_URL}"
+          }
+
+          signal_failure() {
+            local reason="$1"
+            curl -X PUT -H 'Content-Type:' \
+              --data-binary "{\"Status\":\"FAILURE\",\"Reason\":\"$reason\",\"UniqueId\":\"bootstrap\",\"Data\":\"failed\"}" \
+              "${!CFN_SIGNAL_URL}"
+          }
+
+          trap 'signal_failure "Bootstrap failed at line $LINENO"' ERR
+          exec > >(tee -a "${!LOG_FILE}") 2>&1
+
+          # === Phase 1: Install tools ===
+          update_status "[1/5] Installing tools (terraform, kubectl, helm)..."
+
+          # Terraform
+          curl -fsSL "https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip" -o /tmp/terraform.zip
+          unzip -o /tmp/terraform.zip -d /usr/local/bin/
+          rm /tmp/terraform.zip
+
+          # kubectl
+          KUBECTL_VER=$(curl -sL https://dl.k8s.io/release/stable.txt)
+          curl -fsSL "https://dl.k8s.io/release/${!KUBECTL_VER}/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl
+          chmod +x /usr/local/bin/kubectl
+
+          # Helm
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+          # jq, git (ensure present)
+          yum install -y jq git 2>/dev/null || true
+
+          # === Phase 2: Clone repo ===
+          update_status "[2/5] Cloning workshop repository..."
+
+          cd "${!WORKSHOP_DIR}"
+          git clone --branch "${!REPO_BRANCH}" "${!REPO_URL}" repo
+          cd repo
+          chmod +x deploy.sh verify.sh scripts-5g/*.sh
+
+          # === Phase 3: Terraform ===
+          update_status "[3/5] Running Terraform — building VPC, EKS, Redis, SQS (~15 min)..."
+
+          cd terraform
+          echo "region       = \"${AWS::Region}\"" > terraform.tfvars
+          echo "cluster_name = \"devops-agent-demo\"" >> terraform.tfvars
+
+          terraform init -no-color
+          terraform apply -auto-approve -no-color
+          cd ..
+
+          # === Phase 4: Deploy K8s ===
+          update_status "[4/5] Deploying 5G Core network functions..."
+          ./deploy.sh
+
+          # === Phase 5: Verify ===
+          update_status "[5/5] Verifying environment..."
+          ./verify.sh | tee "${!WORKSHOP_DIR}/verify-output.txt"
+
+          # === Done ===
+          update_status "✅ READY — All 5G Core NFs deployed and healthy. Run: cd /opt/workshop/repo && ./verify.sh"
+          signal_success
+
+Outputs:
+  WorkstationInstanceId:
+    Description: EC2 Instance ID — use with SSM Session Manager to connect
+    Value: !Ref WorkstationInstance
+
+  SSMSessionUrl:
+    Description: Click to connect to the workstation via Session Manager
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/systems-manager/session-manager/${WorkstationInstance}?region=${AWS::Region}'
+
+  WorkshopDirectory:
+    Description: Workshop files are located here on the instance
+    Value: /opt/workshop/repo
+
+  CheckProgress:
+    Description: After connecting via SSM, check setup progress with this command
+    Value: cat /opt/workshop/status.txt
+
+  ViewLogs:
+    Description: Watch full setup logs in real-time
+    Value: tail -f /var/log/workshop-setup.log

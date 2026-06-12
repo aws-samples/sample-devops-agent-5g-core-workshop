@@ -142,29 +142,55 @@ Run the automated check:
 
 ## Quick Start
 
+### Option 1: Workshop Event (CloudFormation — recommended for guided workshops)
+
+If you're attending a workshop event with AWS-provided accounts, use the one-click CloudFormation template:
+
+1. **Launch the stack** in the AWS Console:
+   - Template: `cfn/workshop-infra.yaml`
+   - Region: us-east-1
+   - Accept defaults → Create Stack
+2. **Wait ~20-25 minutes** for the stack to reach `CREATE_COMPLETE`
+   - Optionally: SSM into the EC2 and run `cat /opt/workshop/status.txt` to watch progress
+3. **Connect** via Session Manager (link in stack Outputs)
+4. **Verify** the environment:
+   ```bash
+   cd /opt/workshop/repo
+   ./verify.sh
+   ```
+5. **Create DevOps Agent Space** (see docs/workshop-guide.md)
+6. **Run scenarios!**
+
+### Option 2: Self-Paced (Terraform — full control)
+
+If you're using your own AWS account and local tools:
+
 ```bash
 # Clone
-git clone https://github.com/modaoud/aws-devops-agent-5g-core-workshop.git
-cd aws-devops-agent-5g-core-workshop
+git clone https://github.com/aws-samples/sample-devops-agent-5g-core-workshop.git
+cd sample-devops-agent-5g-core-workshop
 
-# 1. Deploy infrastructure (~10 min)
+# 1. Check prerequisites
+./prerequisites.sh
+
+# 2. Deploy infrastructure (~15 min)
 cd terraform/
 cp terraform.tfvars.example terraform.tfvars   # edit region if needed
 terraform init && terraform apply
 cd ..
 
-# 2. Deploy 5G Core application (~2 min)
+# 3. Deploy 5G Core application (~2 min)
 ./deploy.sh
 
-# 3. Verify everything is healthy
+# 4. Verify everything is healthy
 ./verify.sh
 
-# 4. Create DevOps Agent Space (AWS Console — see docs/workshop-guide.md)
+# 5. Create DevOps Agent Space (AWS Console — see docs/workshop-guide.md)
 #    - Create space, assign IAM role
 #    - Add EKS access entry with AmazonAIOpsAssistantPolicy
 #    - Verify agent can list pods
 
-# 5. Run a scenario
+# 6. Run a scenario
 ./scripts-5g/scenario-1-sg-change.sh inject     # break something
 # → Open DevOps Agent → paste the prompt from docs/scenario-1.md
 # → Watch the investigation
@@ -176,6 +202,9 @@ cd ..
 ## Repository Structure
 
 ```
+├── cfn/                    CloudFormation template (Workshop Event path)
+│   ├── workshop-infra.yaml One-click stack: EC2 workstation + auto-provisioning
+│   └── bootstrap.sh       Standalone bootstrap (for manual EC2/Cloud9 use)
 ├── terraform/              Infrastructure (VPC, EKS, Redis, SQS, IAM, Alarms)
 │   ├── main.tf            Provider + VPC
 │   ├── eks.tf             Cluster, node groups, addons, IRSA
