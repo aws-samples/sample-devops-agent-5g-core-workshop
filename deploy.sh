@@ -47,7 +47,7 @@ echo "▸ Deploying Cluster Autoscaler..."
 cd "${SCRIPT_DIR}"
 
 # Patch CA role ARN into manifest
-sed "s|REPLACE_WITH_CA_ROLE_ARN|${CA_ROLE}|g" k8s/cluster-autoscaler.yaml | kubectl apply -f - >/dev/null
+sed "s|REPLACE_WITH_CA_ROLE_ARN|${CA_ROLE}|g" k8s-5g/cluster-autoscaler.yaml | kubectl apply -f - >/dev/null
 kubectl rollout status deployment/cluster-autoscaler -n kube-system --timeout=60s >/dev/null 2>&1 || true
 echo "  ✓ Cluster Autoscaler running"
 echo ""
