@@ -100,9 +100,12 @@ module "eks" {
       }
     } : {},
     # Current user — cluster admin
+    # When running on EC2 with instance profile, caller_identity returns an
+    # assumed-role ARN (arn:aws:sts::ACCT:assumed-role/ROLE_NAME/INSTANCE_ID).
+    # EKS access entries require the IAM role ARN format.
     {
       admin = {
-        principal_arn = data.aws_caller_identity.current.arn
+        principal_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${element(split("/", data.aws_caller_identity.current.arn), 1)}"
         policy_associations = {
           admin = {
             policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
