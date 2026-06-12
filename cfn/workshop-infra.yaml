@@ -106,7 +106,7 @@ Resources:
   WorkstationSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Workshop workstation — egress only (SSM for access)
+      GroupDescription: Workshop workstation - egress only, SSM for access
       VpcId: !Ref WorkstationVPC
       SecurityGroupEgress:
         - IpProtocol: -1
