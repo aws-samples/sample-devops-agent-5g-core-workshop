@@ -231,6 +231,15 @@ Resources:
 
           # === Done ===
           update_status "✅ READY — All 5G Core NFs deployed and healthy. Run: cd /opt/workshop/repo && ./verify.sh"
+
+          # Fix permissions so ssm-user can run terraform/kubectl/scripts
+          chown -R ssm-user:ssm-user "${!WORKSHOP_DIR}"
+
+          # Copy kubeconfig to ssm-user so they can run kubectl and scripts
+          mkdir -p /home/ssm-user/.kube
+          cp /root/.kube/config /home/ssm-user/.kube/config
+          chown -R ssm-user:ssm-user /home/ssm-user/.kube
+
           signal_success
 
 Outputs:
