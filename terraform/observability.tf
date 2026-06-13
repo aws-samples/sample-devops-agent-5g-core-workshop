@@ -6,6 +6,7 @@ resource "aws_sqs_queue" "orders" {
   name                       = "${var.cluster_name}-orders"
   visibility_timeout_seconds = 30
   message_retention_seconds  = 86400
+  sqs_managed_sse_enabled    = true
   tags                       = var.tags
 }
 
