@@ -33,7 +33,10 @@ module "eks" {
     vpc-cni = {
       most_recent = true
     }
-
+    # Required for HPA CPU-based scaling (Scenario 4)
+    metrics-server = {
+      most_recent = true
+    }
   }
 
   # --------------------------------------------------------------------------
