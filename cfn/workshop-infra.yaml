@@ -223,6 +223,7 @@ Resources:
 
           # === Phase 4: Deploy K8s ===
           update_status "[4/5] Deploying 5G Core network functions..."
+          export KUBECONFIG=/root/.kube/config
           ./deploy.sh
 
           # === Phase 5: Verify ===
