@@ -56,12 +56,12 @@ The NFs are Python stubs that speak correct 3GPP vocabulary and use real AWS dep
 
 Each scenario demonstrates a different cross-layer correlation — the agent starts at the symptom and works backward to the root cause:
 
-| # | Scenario | Symptom Layer | Root Cause Layer | What the Agent Finds | Time |
-|---|----------|--------------|-----------------|---------------------|------|
-| 1 | **Security Group Change** | Application (NRF connection errors) | AWS Networking (VPC Security Group) | Traces NRF→Redis connectivity loss through SG rule removal to the specific CloudTrail event — identifies who removed the rule, when, and from what IP | ~2 min |
-| 2 | **ASG Capacity Ceiling** | Kubernetes (pods stuck Pending) | AWS Compute (Auto Scaling Group max) | Correlates FailedScheduling events with node CPU saturation and ASG at max capacity — explains why Cluster Autoscaler can't provision new nodes | ~4 min |
-| 3 | **Bad Deployment** | Kubernetes (ImagePullBackOff) | CI/CD (kubectl set image) | Traces pod failures to a non-existent image tag, finds the exact `kubectl set image` command in EKS audit logs — identifies the user, kubectl version, and source IP | ~3 min |
-| 4 | **HPA Scaling Storm** | Application (intermittent failures) | Configuration (HPA parameters) | Explains the feedback loop: HPA target too low + no stabilization window → rapid scale up/down → NRF connection pool churn → intermittent 5G registration failures | ~8 min |
+| # | Scenario | Symptom | Root Cause | What the Agent Finds | Time |
+|---|----------|---------|-----------|---------------------|------|
+| 1 | **Security Group Change** | NRF can't reach Redis — all NFs lose service discovery, subscribers can't register | VPC Security Group rule removed | Traces NRF→Redis connection failure through SG rule removal to CloudTrail — identifies who revoked the rule, when, and from what IP | ~2 min |
+| 2 | **ASG Capacity Ceiling** | AMF pods stuck Pending during busy hour — new subscriber registrations queuing | Auto Scaling Group max capacity reached | Correlates FailedScheduling events with node CPU saturation and ASG at max — explains why Cluster Autoscaler can't provision nodes to handle busy hour traffic | ~4 min |
+| 3 | **Bad Deployment** | AMF pods in CrashLoopBackOff — active subscribers losing mobility management | `kubectl set image` with non-existent tag | Traces ImagePullBackOff to a bad image tag, finds the exact `kubectl set image` command in EKS audit logs — identifies the user, kubectl version, and source IP | ~3 min |
+| 4 | **HPA Scaling Storm** | AMF replicas thrashing 2→7→3→6 during busy hour — intermittent registration failures as connections churn | HPA misconfigured: 15% target, 0s stabilization | Explains the feedback loop: target too low + no stabilization → rapid scale up/down → NRF connection pool churn → subscribers see intermittent 5G registration failures | ~8 min |
 
 ### Example: Scenario 1 Investigation
 
