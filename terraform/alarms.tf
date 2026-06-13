@@ -133,7 +133,7 @@ resource "aws_cloudwatch_metric_alarm" "cluster_node_saturated" {
 # What happens: HPA target set to 5% with 0s stabilization → pods scale
 # 2→9→2→7 repeatedly → connection churn on Redis → intermittent failures.
 #
-# Alarm: replicas_desired spikes above 6 (HPA over-reacting).
+# Alarm: replicas_desired spikes above 3 (HPA over-reacting).
 # Using replicas_desired rather than available because during oscillation
 # pods may scale up before they all become ready.
 # =============================================================================
@@ -147,7 +147,7 @@ resource "aws_cloudwatch_metric_alarm" "amf_scaling_oscillation" {
   namespace           = "ContainerInsights"
   period              = 60
   statistic           = "Maximum"
-  threshold           = 6
+  threshold           = 3
   treat_missing_data  = "notBreaching"
 
   dimensions = {
