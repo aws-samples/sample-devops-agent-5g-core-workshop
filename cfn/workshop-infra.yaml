@@ -233,13 +233,17 @@ Resources:
           # === Done ===
           update_status "✅ READY — All 5G Core NFs deployed and healthy. Run: cd /opt/workshop/repo && ./verify.sh"
 
-          # Fix permissions so ssm-user can run terraform/kubectl/scripts
-          chown -R ssm-user:ssm-user "${!WORKSHOP_DIR}"
+          # Fix permissions so participants can run terraform/kubectl/scripts
+          # SSM sessions on AL2023 run as ssm-user, which is created on first session.
+          # Make files world-readable and create kubeconfig for both ec2-user and ssm-user.
+          chmod -R 755 "${!WORKSHOP_DIR}"
+          cp -r /root/.kube /home/ec2-user/.kube
+          chown -R ec2-user:ec2-user /home/ec2-user/.kube
 
-          # Copy kubeconfig to ssm-user so they can run kubectl and scripts
-          mkdir -p /home/ssm-user/.kube
-          cp /root/.kube/config /home/ssm-user/.kube/config
-          chown -R ssm-user:ssm-user /home/ssm-user/.kube
+          # Create ssm-user home + kubeconfig (user may not exist yet, ignore errors)
+          mkdir -p /home/ssm-user/.kube 2>/dev/null || true
+          cp /root/.kube/config /home/ssm-user/.kube/config 2>/dev/null || true
+          chown -R 1001:1001 /home/ssm-user 2>/dev/null || true
 
           signal_success
 
