@@ -22,6 +22,18 @@ module "eks" {
   cluster_endpoint_public_access  = true
   cluster_endpoint_private_access = true
 
+  # Allow control plane to reach metrics-server addon on port 10251
+  node_security_group_additional_rules = {
+    metrics_server_ingress = {
+      description                   = "Cluster API to metrics-server"
+      protocol                      = "tcp"
+      from_port                     = 10251
+      to_port                       = 10251
+      type                          = "ingress"
+      source_cluster_security_group = true
+    }
+  }
+
   # EKS Addons
   cluster_addons = {
     coredns = {

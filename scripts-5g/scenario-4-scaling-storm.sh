@@ -46,9 +46,9 @@ case "${1:-inject}" in
     kubectl patch deployment ue-simulator -n ${NAMESPACE} \
       -p '{"spec":{"replicas":3}}' 2>/dev/null || true
     kubectl set env deployment/ue-simulator -n ${NAMESPACE} \
-      REQUESTS_PER_SECOND=15 2>/dev/null || true
+      REQUESTS_PER_SECOND=25 2>/dev/null || true
 
-    echo "  ✓ UE simulator: 3 replicas @ 15 RPS each (45 registrations/sec)"
+    echo "  ✓ UE simulator: 3 replicas @ 25 RPS each (75 registrations/sec)"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "  ✅ FAILURE INJECTED"
