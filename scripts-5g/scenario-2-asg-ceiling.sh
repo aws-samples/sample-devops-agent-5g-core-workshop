@@ -2,12 +2,13 @@
 # =============================================================================
 # Scenario 2 (5G): "Pods won't schedule during busy hour"
 #
-# Simulates: Peak traffic drives AMF HPA scale-up, but the ASG is already at
-# max capacity. New AMF pods are stuck in Pending — subscriber registrations
-# degrade as existing pods are overloaded.
+# Simulates: Peak traffic drives AMF HPA scale-up, but the nodes are already
+# saturated with platform workloads and the ASG is capped at max capacity.
+# New AMF pods are stuck in Pending — subscriber registrations degrade.
 #
-# Failure chain: ASG max capped → AMF replicas requested > schedulable →
-# FailedScheduling events → subscribers queue → registration timeouts.
+# Failure chain: Nodes loaded with platform workloads → ASG max capped →
+# AMF replicas requested > schedulable → FailedScheduling events →
+# subscribers queue → registration timeouts.
 # =============================================================================
 
 set -euo pipefail
@@ -50,7 +51,7 @@ case "${1:-inject}" in
     APP_ASG=$(get_app_asg_name)
     echo "  App ASG: ${APP_ASG}"
 
-    # Cap ASG at 2 nodes and scale down to 2 (simulate pre-existing capacity constraint)
+    # Cap ASG at 2 nodes (simulate cost-control policy)
     aws autoscaling update-auto-scaling-group \
       --auto-scaling-group-name "$APP_ASG" \
       --min-size 2 \
@@ -59,15 +60,56 @@ case "${1:-inject}" in
       --region "${REGION}"
     echo "  ✗ ASG capped at max=2 (simulating cost-control policy)"
 
-    # Wait for extra node to drain
+    # Wait for node count to stabilize
     echo "  ⏳ Waiting for node scale-in (30s)..."
     sleep 30
+
+    # Deploy platform workload that fills node capacity
+    # Simulates real-world: telemetry, monitoring, log shippers consuming CPU
+    kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-collector
+  namespace: ${NAMESPACE}
+  labels:
+    app: telemetry-collector
+    component: platform
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: telemetry-collector
+  template:
+    metadata:
+      labels:
+        app: telemetry-collector
+        component: platform
+    spec:
+      nodeSelector:
+        role: app
+      containers:
+        - name: collector
+          image: public.ecr.aws/docker/library/busybox:1.36
+          command: ["sh", "-c", "while true; do echo 'collecting metrics'; sleep 30; done"]
+          resources:
+            requests:
+              cpu: 600m
+              memory: 128Mi
+            limits:
+              cpu: 600m
+              memory: 128Mi
+EOF
+    echo "  ✗ Platform telemetry-collector deployed (4 × 600m CPU — fills node headroom)"
+
+    # Wait for filler pods to schedule
+    sleep 10
 
     # Remove HPA so manual scaling simulates ops team response
     kubectl delete hpa amf-hpa -n ${NAMESPACE} 2>/dev/null || true
     echo "  ✗ AMF HPA removed (simulating manual capacity increase)"
 
-    # Scale AMF beyond what 2 nodes can handle
+    # Scale AMF beyond what remains on the saturated nodes
     kubectl scale deployment amf -n ${NAMESPACE} --replicas=8
     echo "  ✗ AMF scaled to 8 replicas (simulating busy hour demand)"
 
@@ -83,7 +125,7 @@ case "${1:-inject}" in
     echo ""
     echo "  📟 EXPECTED ALARMS (check within 2-3 minutes):"
     echo "     • 5G-Core-AMF-Replicas-Unavailable  (pods can't schedule)"
-    echo "     • 5G-Core-AMF-HPA-Scaling-Storm     (desired replicas > 6)"
+    echo "     • 5G-Core-Cluster-Node-Capacity-Saturated (node CPU ≥ 80%)"
     echo ""
     echo "  🔍 OBSERVE (once alarms fire):"
     echo "     kubectl get pods -n ${NAMESPACE} -l app=amf"
@@ -102,6 +144,10 @@ case "${1:-inject}" in
     echo "Restoring ASG and AMF scaling..."
 
     APP_ASG=$(get_app_asg_name)
+
+    # Remove capacity filler
+    kubectl delete deployment telemetry-collector -n ${NAMESPACE} 2>/dev/null || true
+    echo "  ✓ Telemetry-collector removed"
 
     aws autoscaling update-auto-scaling-group \
       --auto-scaling-group-name "$APP_ASG" \
